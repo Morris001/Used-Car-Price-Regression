@@ -1,0 +1,186 @@
+---
+title: "Project 2 Regression Set"
+author: "Jane Shen"
+output:
+  pdf_document: default
+  html_notebook: default
+---
+# Data Cleaning
+Link to the data : https://www.kaggle.com/austinreese/craigslist-carstrucks-data
+
+vehicle.csv is a dataset of vehicles listed on craigslist.
+
+NA value counts(descending)
+
+- county :       435,849
+- size :         295,961
+- condition :    186,806
+- paint_color :  135,247
+- drive :        122,011
+- type :         117,108
+- odometer :     75,148
+- manufacturer : 20,747
+- fuel :         2991
+- transmission : 2146
+- title_status : 1806
+- year :         1117
+
+These columns were removed because they are unnecessary :
+
+- id, url, region_url, vin, description, image_url, long, lat
+
+These columns were removed because they are almost entirely NA :
+
+- county, size
+
+These columns were removed because data is too variable and is oftentimes not representative of its actual purpose :
+
+- model 
+
+(For example, sometimes the model value is "$500 DOWN PROGRAMS!!!" or "Honda-Nissan-Kia-Ford-Hyundai-VW", because people on craigslist don't use this feature for its intended purpose, so this data is not helpful)
+
+```{r}
+# Load data set
+Vehicle <- read.csv("vehicles.csv", stringsAsFactors=TRUE, header=TRUE)
+df <- Vehicle
+
+# Remove unwanted columns
+drop <- c("id","url","region_url","vin","description","image_url","long","lat","county","model", "size", "region")
+df <- df[,!(names(df) %in% drop)]
+
+# Convert empty strings to NA to make cleaning easier
+library(dplyr)
+df <- mutate_all(df, list(~na_if(.,"")))
+
+# Keep only complete observations
+df <- df[complete.cases(df),]
+
+# Remove price values greater than $1,000,000 because there are only 6 cases, and they make graphing the data difficult
+df <- df[df$price < 1000000,]
+
+# Factor columns as needed
+df$manufacturer <- as.factor(df$manufacturer)
+df$condition <- as.factor(df$condition)
+df$cylinders <- as.factor(df$cylinders)
+df$fuel <- as.factor(df$fuel)
+df$title_status <- as.factor(df$title_status)
+df$transmission <- as.factor(df$transmission)
+df$drive <- as.factor(df$drive)
+df$type <- as.factor(df$type)
+df$paint_color <- as.factor(df$paint_color)
+df$state <- as.factor(df$state)
+```
+
+# Data Exploration
+```{r}
+summary(df)
+dim(df)
+names(df)
+str(df)
+head(df)
+
+hist(df$year, col="pink", main="Histogram of Manufacturing Year", xlab="Year")
+plot(df$price, df$odometer, xlab="Price", ylab="Odometer", main="Price Based on Mileage", col="pink", pch=1)
+```
+# Modeling
+The models will predict on price using all other features left in the data set after cleaning.
+A linear regression model shows that all the left over features are important predictors.
+We separate data into train and test sets of 75% and 25% respectively.
+Accuracy comparisons are listed at the bottom of the notebook.
+
+```{r}
+library(caret)
+library(class)
+library(e1071)
+
+# Remove manufacturer morgan because there is only one instance, and it can not show up in both train and test.
+df <- df[!df$manufacturer=="morgan",]
+
+# Divide into train and test sets
+set.seed(1234)
+i <- sample(1:nrow(df), nrow(df) * 0.75, replace=FALSE)
+train <- df[i,]
+test <- df[-i,]
+```
+
+# Linear Regression
+Prediction accuracy was not amazing, being the lowest of the 3 models. MSE is rather low as well though, in comparison to others.
+Manufacturer factors seem to be vary a lot in predictor quality, but the majority of them have 3*.
+```{r}
+# Build the model
+lm1 <- lm(price~., data=train)
+summary(lm1)
+
+# Evaluate on test data
+pred_lm <- predict(lm1, newdata=test)
+cor_lm <- cor(pred_lm, test$price)
+mse_lm <- mean((pred_lm - test$price)^2)
+
+print(paste("correlation: ", cor_lm))
+print(paste("mse: ", mse_lm))
+```
+
+# Decision Tree
+The decision tree had slightly higher correlation than linear regression, and slightly lower MSE.
+No pruning was done because the tree is rather balanced and the cv tree plot had no noticeable elbows.
+```{r}
+# Build the model
+library(tree)
+tree1 <- tree(train$price~.-state-manufacturer, data=train)
+plot(tree1)
+text(tree1, cex=0.5, pretty=0)
+
+# Evaluate on test data
+pred_tree <- predict(tree1, newdata=test)
+cor_tree <- cor(pred_tree, test$price)
+mse_tree <- mean((pred_tree - test$price)^2)
+
+print(paste("correlation: ", cor_tree))
+print(paste("mse: ", mse_tree))
+```
+
+# Radial SVM
+The radial SVM had the highest accuracy of all 3 models, but the input data had to be subset because using the full amount of data took longer than 24 hours to complete running, even when set to a linear kernel. The resulting MSE however, was the largest of all 3 by a landslide.
+```{r}
+# Build the model
+svm1 <- svm(price~., data=train[1:4254,], kernel="radial", cost=100)
+summary(svm1)
+
+# Evaluate on training set
+pred_svm = predict(svm1, newdata=test[1:709,])
+cor_svm = cor(pred_svm, test$price[1:709])
+mse_svm = mean((pred_svm - test$price)^2)
+
+print(paste("correlation: ", cor_svm))
+print(paste("mse: ", mse_svm))
+```
+# Ensemble Method
+The ensemble method XGBoost did better than all other models at a correlation of 0.82582, while all others were lower than 0.7. It also achieved the lowest MSE. Feature selection for XGBoost remains the same as for other models to get a better comparison between algorithsm.
+```{r}
+# Build the model
+library(xgboost)
+bst1 <- xgboost(data=data.matrix(train[,-1], rownames.force=NA), label=data.matrix(train[,1], rownames.force=NA), nround=100, objective="reg:tweedie")
+summary(bst1)
+
+# Evaluate on test set
+pred_bst <- predict(bst1, data.matrix(test[,-1], rownames.force=NA))
+cor_bst <- cor(pred_bst, data.matrix(test$price, rownames.force=NA))
+mse_bst <- mean((pred_bst - test$price)^2)
+
+print(paste("correlation: ", cor_bst))
+print(paste("mse: ", mse_bst))
+```
+
+# Comparison and Analysis
+Best to worst correlation vs MSE
+
+- XGBoost : 0.82582 vs 34,370,348
+- Radial SVM : 0.68152 vs 172,542,200
+- Decision Tree : 0.63206 vs 64,876,448
+- Linear Regression : 0.61596 vs 67,041,813
+
+Unsurprisingly, XGBoost won in both highest correlation and lowest MSE by a landslide. This is expected because XGBoost is known to be better than other models in both accuracy, speed, and interpretability.
+
+Radial SVM had the best correlation of non-ensemble models but largest MSE, while linear regression had the worst correlation and a lower MSE. We can conclude that linear regression has the worst correlation probably because it assumes a linear data set, but as we can tell from the graph, it is obviously quite curved. For this same reason, the Radial SVM worked the best - as it's a good approach when the data is not linearly separable.
+
+From the results of the data, as expected, cars that are older, have a higher odometer value, and worse condition are sold for much cheaper than those that are the opposite. The value with the biggest influence on the price seems to be the car model's age, and from the tree, we can see that for older cars, sellers prioritize the car type - namely whether it is a "family" car(mini-van, suv, etc) or a "personal" car. For newer cars, sellers prioritize cylinder count and odometer value in naming price.
